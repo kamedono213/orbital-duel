@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>ORBITAL DUEL</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#05070f; touch-action:none; -webkit-user-select:none; user-select:none; }
+  canvas { touch-action:none; display:block; position:fixed; inset:0; }
+  #hud { position:fixed; top:0; left:0; right:0; padding:10px 16px; padding-top:calc(10px + env(safe-area-inset-top,0px)); display:flex; justify-content:center; font:bold 17px/1.2 -apple-system,system-ui,sans-serif; color:#fff; text-shadow:0 0 8px rgba(80,180,255,.8); pointer-events:none; z-index:5; }
+  #hud.p1 { color:#7ee8fa; } #hud.p2 { color:#ff9f7e; }
+  .screen { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; z-index:10; color:#fff; font-family:-apple-system,system-ui,sans-serif; text-align:center; padding:24px; box-sizing:border-box; }
+  .screen[hidden]{ display:none; }
+  #titleScreen, #onlineMenuScreen, #onlineCreateScreen, #onlineJoinScreen { background:radial-gradient(circle at 50% 30%, #122044, #05070f 70%); }
+  .title { font-size:36px; font-weight:800; letter-spacing:3px; background:linear-gradient(135deg,#7ee8fa,#eecda3); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .sub2 { font-size:14px; opacity:.8; max-width:300px; line-height:1.7; }
+  .btn { font:bold 20px -apple-system,system-ui,sans-serif; color:#05070f; background:linear-gradient(135deg,#7ee8fa,#a0f0c0); border:0; border-radius:999px; padding:14px 48px; cursor:pointer; box-shadow:0 8px 24px rgba(126,232,250,.4); -webkit-tap-highlight-color:transparent; }
+  .btn.secondary { background:transparent; border:2px solid rgba(255,255,255,.4); color:#fff; box-shadow:none; }
+  .btn.small { padding:10px 28px; font-size:15px; }
+  #resultScreen { background:rgba(5,7,15,.97); }
+  #resultScreen .who { font-size:32px; font-weight:800; }
+  #flipHint { position:fixed; left:0; right:0; text-align:center; font:bold 12px -apple-system,system-ui,sans-serif; color:#ff9f7e; text-shadow:0 0 8px rgba(255,159,126,.8); pointer-events:none; z-index:5; }
+  .roomCode { font-size:52px; font-weight:800; letter-spacing:8px; color:#fff; text-shadow:0 0 16px rgba(126,232,250,.7); }
+  .codeInput { font-size:32px; letter-spacing:8px; text-align:center; width:200px; padding:10px; border-radius:12px; border:2px solid rgba(126,232,250,.5); background:#0d1424; color:#fff; }
+  .codeInput:focus { outline:none; border-color:#7ee8fa; }
+  .errText { color:#ff6b6b; font-size:13px; min-height:18px; }
+  .spinner { width:28px; height:28px; border:3px solid rgba(126,232,250,.25); border-top-color:#7ee8fa; border-radius:50%; animation:spin 0.9s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div id="titleScreen" class="screen">
+  <div class="title">ORBITAL<br>DUEL</div>
+  <div class="sub2">自分側と相手側、向かい合う発射台から交互に1発ずつ。<br>砲台は自動で左右に揺れていて、タップした瞬間の向きで発射。<br>オーブに当てて耐久値3を削り0で破壊。<br>自分のショットが自分側のDEATH LINEに戻ってきたら負け。</div>
+  <button class="btn" id="offlineBtn">オフライン対戦</button>
+  <button class="btn secondary" id="onlineBtn">オンライン対戦</button>
+</div>
+
+<div id="onlineMenuScreen" class="screen" hidden>
+  <div class="title" style="font-size:26px;">オンライン対戦</div>
+  <button class="btn" id="createRoomBtn">部屋を作る</button>
+  <button class="btn secondary" id="showJoinBtn">部屋に入る</button>
+  <button class="btn secondary small" id="onlineMenuBackBtn">戻る</button>
+</div>
+
+<div id="onlineCreateScreen" class="screen" hidden>
+  <div class="sub2">この番号を相手に伝えてください</div>
+  <div class="roomCode" id="roomCodeDisplay">----</div>
+  <div class="spinner"></div>
+  <div class="sub2">相手の参加を待っています...</div>
+  <button class="btn secondary small" id="createCancelBtn">キャンセル</button>
+</div>
+
+<div id="onlineJoinScreen" class="screen" hidden>
+  <div class="sub2">4桁の部屋番号を入力してください</div>
+  <input class="codeInput" id="joinCodeInput" inputmode="numeric" maxlength="4" placeholder="0000">
+  <div class="errText" id="joinErrText"></div>
+  <button class="btn" id="joinSubmitBtn">参加する</button>
+  <button class="btn secondary small" id="joinBackBtn">戻る</button>
+</div>
+
+<div id="resultScreen" class="screen" hidden>
+  <div class="who" id="resultWho">P1 WIN!</div>
+  <div class="sub2" id="resultSub"></div>
+  <button class="btn" id="retryBtn">もう一度</button>
+  <button class="btn secondary small" id="resultMenuBtn">メニューへ</button>
+</div>
+
+<div id="hud" class="p1" hidden>PLAYER 1 TURN</div>
+<div id="flipHint" hidden>↑ 上下逆に持ち替えてください ↑</div>
+
+<canvas id="c"></canvas>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  projectId: "orbital-duel-kamedono",
+  appId: "1:532285190755:web:d69e563a6a80604e6afe56",
+  storageBucket: "orbital-duel-kamedono.firebasestorage.app",
+  apiKey: "AIzaSyB-k5UV3M9lidOoKux-eRm3igf7rMoPeQs",
+  authDomain: "orbital-duel-kamedono.firebaseapp.com",
+  messagingSenderId: "532285190755",
+};
+const fbApp = initializeApp(firebaseConfig);
+const db = getFirestore(fbApp);
+
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const titleScreen = document.getElementById('titleScreen');
+  const onlineMenuScreen = document.getElementById('onlineMenuScreen');
+  const onlineCreateScreen = document.getElementById('onlineCreateScreen');
+  const onlineJoinScreen = document.getElementById('onlineJoinScreen');
+  const resultScreen = document.getElementById('resultScreen');
+  const hud = document.getElementById('hud');
+  const flipHint = document.getElementById('flipHint');
+  const resultWho = document.getElementById('resultWho');
+  const resultSub = document.getElementById('resultSub');
+  const roomCodeDisplay = document.getElementById('roomCodeDisplay');
+  const joinCodeInput = document.getElementById('joinCodeInput');
+  const joinErrText = document.getElementById('joinErrText');
+
+  // palette matched to the real game's neon badge look (cyan / hot pink,
+  // seen directly in its sprite sheet)
+  const PLAYER_COLOR = { 1: '#4fd8ff', 2: '#ff3fc9' };
+  const ORB_PALETTE = ['#4fd8ff', '#ff3fc9', '#6dff6d', '#b980ff'];
+  function orbColor(o) { return ORB_PALETTE[o.colorIdx % ORB_PALETTE.length]; }
+
+  // ---- soft, cohesive synthesized sound palette ----
+  let actx = null;
+  function ac() { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; }
+  function tone(freq, dur, { type = 'sine', vol = 0.12, slideTo = null, delay = 0 } = {}) {
+    try {
+      const a = ac();
+      const t0 = a.currentTime + delay;
+      const osc = a.createOscillator(); const gain = a.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t0);
+      if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(vol, t0 + Math.min(0.03, dur * 0.25));
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(gain); gain.connect(a.destination);
+      osc.start(t0); osc.stop(t0 + dur + 0.02);
+    } catch (e) {}
+  }
+
+  const sfx = {
+    shoot: () => {
+      tone(140, 0.1, { type: 'sine', vol: 0.18 });
+      tone(380, 0.12, { type: 'triangle', vol: 0.1, slideTo: 760, delay: 0.015 });
+    },
+    wall: () => tone(520, 0.07, { type: 'sine', vol: 0.08, slideTo: 420 }),
+    hit: (hp) => tone(480 + (3 - hp) * 90, 0.14, { type: 'triangle', vol: 0.14, slideTo: 620 + (3 - hp) * 90 }),
+    destroy: () => {
+      tone(660, 0.16, { type: 'sine', vol: 0.16 });
+      tone(990, 0.2, { type: 'sine', vol: 0.12, delay: 0.05 });
+    },
+    settle: () => tone(220, 0.32, { type: 'sine', vol: 0.15, slideTo: 1100 }),
+    win: () => { tone(523, 0.16, { type: 'sine', vol: 0.16 }); tone(784, 0.26, { type: 'sine', vol: 0.14, delay: 0.14 }); },
+    lose: () => tone(300, 0.5, { type: 'sine', vol: 0.14, slideTo: 120 }),
+  };
+
+  let W = 0, H = 0, DPR = Math.min(2, window.devicePixelRatio || 1);
+  let cannon = { 1: { x: 0, y: 0 }, 2: { x: 0, y: 0 } };
+  let deathLineY = { 1: 0, 2: 0 };
+  const CANNON_MARGIN = 60, DEATHLINE_MARGIN = 115;
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    cannon[1] = { x: W / 2, y: H - CANNON_MARGIN };
+    cannon[2] = { x: W / 2, y: CANNON_MARGIN };
+    deathLineY[1] = H - DEATHLINE_MARGIN;
+    deathLineY[2] = DEATHLINE_MARGIN;
+    buildGrid();
+    buildStars();
+  }
+  window.addEventListener('resize', resize);
+
+  // ---- warped-space gravity grid ----
+  const GRID_SPACING = 26;
+  const GRAVITY_RADIUS_MULT = 8;
+  const GRAVITY_K = 32000;
+  const GRAVITY_MAX_FORCE = 3200;
+  let gridCols = 0, gridRows = 0, gridPts = null;
+  function buildGrid() {
+    gridCols = Math.ceil(W / GRID_SPACING) + 1;
+    gridRows = Math.ceil(H / GRID_SPACING) + 1;
+    gridPts = new Float32Array(gridCols * gridRows * 2);
+  }
+  function updateGrid() {
+    for (let r = 0; r < gridRows; r++) {
+      for (let c = 0; c < gridCols; c++) {
+        const idx = (r * gridCols + c) * 2;
+        let x = c * GRID_SPACING, y = r * GRID_SPACING;
+        for (const o of orbs) {
+          const dx = x - o.x, dy = y - o.y;
+          const dist = Math.max(6, Math.hypot(dx, dy));
+          const influence = o.r * GRAVITY_RADIUS_MULT;
+          if (dist < influence) {
+            const pull = (1 - dist / influence) * o.r * 0.9;
+            x -= (dx / dist) * pull; y -= (dy / dist) * pull;
+          }
+        }
+        gridPts[idx] = x; gridPts[idx + 1] = y;
+      }
+    }
+  }
+  function gravityForceAt(x, y) {
+    let ax = 0, ay = 0;
+    for (const o of orbs) {
+      const dx = o.x - x, dy = o.y - y;
+      const dist = Math.max(14, Math.hypot(dx, dy));
+      const influence = o.r * GRAVITY_RADIUS_MULT;
+      if (dist < influence) {
+        const f = Math.min(GRAVITY_MAX_FORCE, (GRAVITY_K * o.r) / (dist * dist));
+        ax += (dx / dist) * f; ay += (dy / dist) * f;
+      }
+    }
+    return { ax, ay };
+  }
+
+  // ---- tunable parameters ----
+  const SHOT_SPEED = 720; // 480 * 1.25 * 1.2
+  const SHOT_RADIUS = 8;
+  const ORB_GROW_SPEED = 160;
+  const ORB_HP = 3;
+  const DRAG_PER_SEC = 0.62;
+  const WALL_BOUNCE_DAMPING = 0.85;
+  const SETTLE_SPEED = 90;
+  const MAX_BOUNCES = 8;
+  const MAX_FLIGHT_MS = 7000;
+  const SWING_PERIOD = 1.6;
+  const SWING_HALF_ANGLE = 58 * Math.PI / 180;
+
+  let state = 'title';
+  let mode = 'offline'; // 'offline' | 'online'
+  let localPlayer = null; // 1 | 2, only meaningful in online mode
+  let roomCode = null;
+  let roomUnsub = null;
+  let turn = 1;
+  let orbs = [];
+  let shot = null;
+  let particles = [];
+  let startTime = 0;
+
+  // ---- screen helpers ----
+  function hideAllScreens() {
+    titleScreen.hidden = true; onlineMenuScreen.hidden = true; onlineCreateScreen.hidden = true;
+    onlineJoinScreen.hidden = true; resultScreen.hidden = true;
+  }
+  function goTitle() {
+    if (roomUnsub) { roomUnsub(); roomUnsub = null; }
+    roomCode = null; localPlayer = null; mode = 'offline';
+    hideAllScreens(); hud.hidden = true; flipHint.hidden = true;
+    titleScreen.hidden = false; state = 'title';
+  }
+
+  function resetGame() { orbs = []; turn = 1; shot = null; particles = []; startTime = performance.now(); }
+
+  function startMatch() {
+    mode = 'offline'; localPlayer = null;
+    resetGame();
+    hideAllScreens(); hud.hidden = false;
+    state = 'aiming';
+    updateHud();
+    requestAnimationFrame(loop);
+  }
+  function updateHud() {
+    if (mode === 'online') {
+      hud.textContent = (turn === localPlayer) ? 'あなたの番です' : '相手の番です';
+    } else {
+      hud.textContent = 'PLAYER ' + turn + ' TURN';
+    }
+    hud.className = 'p' + turn;
+    flipHint.hidden = !(mode === 'offline' && turn === 2);
+  }
+
+  document.getElementById('offlineBtn').addEventListener('click', startMatch);
+  document.getElementById('onlineBtn').addEventListener('click', () => {
+    hideAllScreens(); onlineMenuScreen.hidden = false;
+  });
+  document.getElementById('onlineMenuBackBtn').addEventListener('click', goTitle);
+  document.getElementById('retryBtn').addEventListener('click', () => {
+    if (mode === 'online') { goTitle(); return; } // online: start a fresh room instead of instant retry
+    startMatch();
+  });
+  document.getElementById('resultMenuBtn').addEventListener('click', goTitle);
+
+  // ---- online: room code helpers ----
+  function genCode() { return String(Math.floor(1000 + Math.random() * 9000)); }
+
+  function normOrbs() {
+    const span = deathLineY[1] - deathLineY[2];
+    return orbs.map(o => ({ nx: o.x / W, ny: (o.y - deathLineY[2]) / span, nr: o.r / W, hp: o.hp, colorIdx: o.colorIdx }));
+  }
+  function denormOrbs(list) {
+    const span = deathLineY[1] - deathLineY[2];
+    return (list || []).map(n => ({ x: n.nx * W, y: deathLineY[2] + n.ny * span, r: n.nr * W, targetR: n.nr * W, hp: n.hp, colorIdx: n.colorIdx }));
+  }
+
+  async function writeRoomState(partial) {
+    if (!roomCode) return;
+    try { await updateDoc(doc(db, 'rooms', roomCode), partial); } catch (e) {}
+  }
+
+  function beginOnlineMatch() {
+    resetGame();
+    hideAllScreens(); hud.hidden = false;
+    state = 'aiming';
+    updateHud();
+    requestAnimationFrame(loop);
+  }
+
+  function applyRemoteState(data) {
+    if (!data) return;
+    if (data.guestJoined && state !== 'aiming' && state !== 'flying' && state !== 'settling' && state !== 'result') {
+      beginOnlineMatch();
+    }
+    if (state === 'aiming' || state === 'flying' || state === 'settling') {
+      orbs = denormOrbs(data.orbs);
+      turn = data.turn || 1;
+      updateHud();
+    }
+    if (data.status === 'finished' && data.winner && state !== 'result') {
+      const winner = data.winner, loser = winner === 1 ? 2 : 1;
+      state = 'result';
+      hud.hidden = true; flipHint.hidden = true;
+      sfx.lose(); setTimeout(sfx.win, 300);
+      resultWho.textContent = 'P' + winner + ' WIN!';
+      resultWho.style.color = PLAYER_COLOR[winner];
+      resultSub.textContent = 'P' + loser + 'のショットが自分側のDEATH LINEに到達';
+      resultScreen.hidden = false;
+    }
+  }
+
+  async function createRoom() {
+    roomCode = genCode();
+    localPlayer = 1; mode = 'online';
+    roomCodeDisplay.textContent = roomCode;
+    hideAllScreens(); onlineCreateScreen.hidden = false;
+    await setDoc(doc(db, 'rooms', roomCode), {
+      createdAt: Date.now(), status: 'waiting', turn: 1, orbs: [], winner: null, guestJoined: false
+    });
+    roomUnsub = onSnapshot(doc(db, 'rooms', roomCode), (snap) => applyRemoteState(snap.data()));
+  }
+  document.getElementById('createRoomBtn').addEventListener('click', createRoom);
+  document.getElementById('createCancelBtn').addEventListener('click', goTitle);
+
+  document.getElementById('showJoinBtn').addEventListener('click', () => {
+    hideAllScreens(); onlineJoinScreen.hidden = false; joinErrText.textContent = ''; joinCodeInput.value = '';
+  });
+  document.getElementById('joinBackBtn').addEventListener('click', goTitle);
+  async function joinRoom() {
+    const code = joinCodeInput.value.trim();
+    if (!/^\d{4}$/.test(code)) { joinErrText.textContent = '4桁の数字を入力してください'; return; }
+    const ref = doc(db, 'rooms', code);
+    let snap;
+    try { snap = await getDoc(ref); } catch (e) { joinErrText.textContent = '通信エラーです'; return; }
+    if (!snap.exists()) { joinErrText.textContent = '部屋が見つかりません'; return; }
+    roomCode = code; localPlayer = 2; mode = 'online';
+    await updateDoc(ref, { guestJoined: true, status: 'playing' });
+    roomUnsub = onSnapshot(ref, (s) => applyRemoteState(s.data()));
+  }
+  document.getElementById('joinSubmitBtn').addEventListener('click', joinRoom);
+
+  function cannonAngle(player) {
+    const t = (performance.now() - startTime) / 1000;
+    const phase = Math.sin((2 * Math.PI / SWING_PERIOD) * t + (player === 2 ? Math.PI : 0));
+    return phase * SWING_HALF_ANGLE;
+  }
+  function aimDir(player) {
+    const a = cannonAngle(player);
+    const base = player === 1 ? -Math.PI / 2 : Math.PI / 2;
+    const ang = base + a;
+    return { dx: Math.cos(ang), dy: Math.sin(ang) };
+  }
+
+  canvas.addEventListener('pointerdown', () => {
+    if (state !== 'aiming') return;
+    if (mode === 'online' && turn !== localPlayer) return;
+    const d = aimDir(turn);
+    const c = cannon[turn];
+    shot = { x: c.x, y: c.y, vx: d.dx * SHOT_SPEED, vy: d.dy * SHOT_SPEED, trail: [], bounces: 0, owner: turn, born: performance.now(), armed: false };
+    sfx.shoot();
+    state = 'flying';
+  });
+
+  function burst(x, y, color, n, speed) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, s = (speed || 160) * (0.4 + Math.random() * 0.8);
+      particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 400 + Math.random() * 400, born: performance.now(), color, size: 2 + Math.random() * 4 });
+    }
+  }
+  function nearestObstacleDist(x, y, excludeOrb) {
+    let d = Math.min(x, W - x, y - deathLineY[2], deathLineY[1] - y);
+    for (const o of orbs) {
+      if (o === excludeOrb) continue;
+      const dist = Math.hypot(x - o.x, y - o.y) - o.r;
+      if (dist < d) d = dist;
+    }
+    return Math.max(4, d);
+  }
+  function stopAndCreateOrb(x, y) {
+    const orb = { x, y, r: 2, targetR: 0, hp: ORB_HP, colorIdx: Math.floor(Math.random() * ORB_PALETTE.length) };
+    orb.targetR = nearestObstacleDist(x, y, orb);
+    orbs.push(orb);
+    sfx.settle();
+    shot = null;
+    state = 'settling';
+    const newTurn = turn === 1 ? 2 : 1;
+    if (mode === 'online') writeRoomState({ orbs: normOrbs(), turn: newTurn });
+    setTimeout(() => {
+      if (state !== 'settling') return;
+      turn = newTurn;
+      updateHud();
+      state = 'aiming';
+    }, 500);
+  }
+
+  function endMatch(winner, loser) {
+    state = 'result';
+    hud.hidden = true; flipHint.hidden = true;
+    sfx.lose(); setTimeout(sfx.win, 300);
+    resultWho.textContent = 'P' + winner + ' WIN!';
+    resultWho.style.color = PLAYER_COLOR[winner];
+    resultSub.textContent = 'P' + loser + 'のショットが自分側のDEATH LINEに到達';
+    resultScreen.hidden = false;
+    if (mode === 'online') writeRoomState({ status: 'finished', winner, orbs: normOrbs(), turn });
+  }
+
+  function physicsStep(dt) {
+    if (state !== 'flying' || !shot) return;
+    const drag = Math.pow(DRAG_PER_SEC, dt);
+    shot.vx *= drag; shot.vy *= drag;
+    const speedBeforeGravity = Math.hypot(shot.vx, shot.vy);
+    const { ax, ay } = gravityForceAt(shot.x, shot.y);
+    shot.vx += ax * dt; shot.vy += ay * dt;
+    const speedAfterGravity = Math.hypot(shot.vx, shot.vy);
+    if (speedAfterGravity > 0.0001) {
+      const rescale = speedBeforeGravity / speedAfterGravity;
+      shot.vx *= rescale; shot.vy *= rescale;
+    }
+    const prevX = shot.x, prevY = shot.y;
+    shot.x += shot.vx * dt; shot.y += shot.vy * dt;
+    shot.trail.push({ x: shot.x, y: shot.y });
+    if (shot.trail.length > 20) shot.trail.shift();
+
+    let bounced = false;
+    if (shot.x < SHOT_RADIUS) { shot.x = SHOT_RADIUS; shot.vx *= -1; bounced = true; }
+    if (shot.x > W - SHOT_RADIUS) { shot.x = W - SHOT_RADIUS; shot.vx *= -1; bounced = true; }
+    if (bounced) { shot.vx *= WALL_BOUNCE_DAMPING; shot.vy *= WALL_BOUNCE_DAMPING; shot.bounces++; sfx.wall(); }
+
+    if (!shot.armed) {
+      if (shot.owner === 1 && shot.y < deathLineY[1] - SHOT_RADIUS) shot.armed = true;
+      if (shot.owner === 2 && shot.y > deathLineY[2] + SHOT_RADIUS) shot.armed = true;
+    }
+    function headingHome() {
+      return (shot.owner === 1 && shot.vy > 0) || (shot.owner === 2 && shot.vy < 0);
+    }
+    if (bounced && !shot.armed && headingHome()) {
+      const loser = shot.owner; shot = null;
+      endMatch(loser === 1 ? 2 : 1, loser);
+      return;
+    }
+
+    const farLine = deathLineY[shot.owner === 1 ? 2 : 1];
+    if (shot.owner === 1 && shot.y < farLine && shot.vy < 0) { shot.y = farLine; shot.vy *= -WALL_BOUNCE_DAMPING; shot.vx *= WALL_BOUNCE_DAMPING; shot.bounces++; sfx.wall(); }
+    else if (shot.owner === 2 && shot.y > farLine && shot.vy > 0) { shot.y = farLine; shot.vy *= -WALL_BOUNCE_DAMPING; shot.vx *= WALL_BOUNCE_DAMPING; shot.bounces++; sfx.wall(); }
+    else if (shot.armed && shot.owner === 1 && shot.y + SHOT_RADIUS > deathLineY[1]) { shot = null; endMatch(2, 1); return; }
+    else if (shot.armed && shot.owner === 2 && shot.y - SHOT_RADIUS < deathLineY[2]) { shot = null; endMatch(1, 2); return; }
+
+    let hitOrb = null, hitT = Infinity;
+    for (const o of orbs) {
+      const dx = shot.x - prevX, dy = shot.y - prevY;
+      const fx = prevX - o.x, fy = prevY - o.y;
+      const rr = o.r + SHOT_RADIUS;
+      const a = dx * dx + dy * dy;
+      const b = 2 * (fx * dx + fy * dy);
+      const c = fx * fx + fy * fy - rr * rr;
+      const disc = b * b - 4 * a * c;
+      if (disc < 0 || a === 0) continue;
+      const sq = Math.sqrt(disc);
+      const t1 = (-b - sq) / (2 * a);
+      if (t1 >= 0 && t1 <= 1 && t1 < hitT) { hitT = t1; hitOrb = o; }
+    }
+    if (hitOrb) {
+      const cx = prevX + (shot.x - prevX) * hitT;
+      const cy = prevY + (shot.y - prevY) * hitT;
+      hitOrb.hp--;
+      sfx.hit(hitOrb.hp);
+      burst(cx, cy, PLAYER_COLOR[shot.owner], 10, 130);
+      const destroyed = hitOrb.hp <= 0;
+      if (destroyed) {
+        sfx.destroy();
+        burst(hitOrb.x, hitOrb.y, '#eecda3', 26, 220);
+        orbs.splice(orbs.indexOf(hitOrb), 1);
+      }
+      const nx = (cx - hitOrb.x) / (hitOrb.r + SHOT_RADIUS || 1);
+      const ny = (cy - hitOrb.y) / (hitOrb.r + SHOT_RADIUS || 1);
+      shot.x = cx + nx * 1.5; shot.y = cy + ny * 1.5;
+      const vn = shot.vx * nx + shot.vy * ny;
+      shot.vx -= 2 * vn * nx; shot.vy -= 2 * vn * ny;
+      shot.vx *= WALL_BOUNCE_DAMPING; shot.vy *= WALL_BOUNCE_DAMPING;
+      shot.bounces++;
+      if (!destroyed) sfx.wall();
+      if (!shot.armed && headingHome()) {
+        const loser = shot.owner; shot = null;
+        endMatch(loser === 1 ? 2 : 1, loser);
+        return;
+      }
+    }
+
+    const speed = Math.hypot(shot.vx, shot.vy);
+    if (speed < SETTLE_SPEED || shot.bounces > MAX_BOUNCES || performance.now() - shot.born > MAX_FLIGHT_MS) {
+      const y = Math.max(deathLineY[2] + 6, Math.min(shot.y, deathLineY[1] - 6));
+      stopAndCreateOrb(shot.x, y);
+    }
+  }
+
+  function growOrbs(dt) { for (const o of orbs) if (o.r < o.targetR) o.r = Math.min(o.targetR, o.r + ORB_GROW_SPEED * dt); }
+
+  let stars = null;
+  function buildStars() {
+    stars = [];
+    const n = Math.floor((W * H) / 9000);
+    for (let i = 0; i < n; i++) {
+      stars.push({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.4 + 0.3, tw: Math.random() * Math.PI * 2 });
+    }
+  }
+  function drawBg(now) {
+    ctx.fillStyle = '#05070f'; ctx.fillRect(0, 0, W, H);
+    if (!stars) buildStars();
+    for (const s of stars) {
+      const a = 0.35 + 0.35 * Math.sin(now / 900 + s.tw);
+      ctx.fillStyle = 'rgba(180,210,255,' + a.toFixed(2) + ')';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  function drawGrid() {
+    updateGrid();
+    ctx.save();
+    ctx.strokeStyle = 'rgba(126,180,255,0.28)'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let r = 0; r < gridRows; r++) for (let c = 0; c < gridCols - 1; c++) {
+      const i0 = (r * gridCols + c) * 2, i1 = (r * gridCols + c + 1) * 2;
+      ctx.moveTo(gridPts[i0], gridPts[i0 + 1]); ctx.lineTo(gridPts[i1], gridPts[i1 + 1]);
+    }
+    for (let c = 0; c < gridCols; c++) for (let r = 0; r < gridRows - 1; r++) {
+      const i0 = (r * gridCols + c) * 2, i1 = ((r + 1) * gridCols + c) * 2;
+      ctx.moveTo(gridPts[i0], gridPts[i0 + 1]); ctx.lineTo(gridPts[i1], gridPts[i1 + 1]);
+    }
+    ctx.stroke(); ctx.restore();
+  }
+  function drawDeathLines() {
+    for (const p of [1, 2]) {
+      ctx.save();
+      ctx.strokeStyle = PLAYER_COLOR[p] + '99'; ctx.lineWidth = 2; ctx.setLineDash([8, 8]);
+      ctx.beginPath(); ctx.moveTo(0, deathLineY[p]); ctx.lineTo(W, deathLineY[p]); ctx.stroke();
+      ctx.restore();
+    }
+  }
+  function drawCannon(p) {
+    const c = cannon[p];
+    const d = aimDir(p);
+    ctx.save(); ctx.translate(c.x, c.y);
+    const active = state !== 'result' && turn === p;
+    const g = ctx.createRadialGradient(0, 0, 4, 0, 0, 40);
+    g.addColorStop(0, PLAYER_COLOR[p] + (active ? 'cc' : '55')); g.addColorStop(1, PLAYER_COLOR[p] + '00');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, 40, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = PLAYER_COLOR[p]; ctx.lineWidth = 4; ctx.globalAlpha = active ? 1 : 0.4;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(d.dx * 34, d.dy * 34); ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = PLAYER_COLOR[p];
+    ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+  function drawOrb(o) {
+    ctx.save();
+    const col = orbColor(o);
+    const g = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, o.r);
+    g.addColorStop(0, '#0d1424'); g.addColorStop(0.75, '#0d1424'); g.addColorStop(1, col + '22');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = Math.max(10, o.r * 0.5); ctx.shadowColor = col;
+    ctx.strokeStyle = col; ctx.lineWidth = Math.max(2, o.r * 0.1);
+    ctx.beginPath(); ctx.arc(o.x, o.y, o.r * 0.92, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#fff';
+    ctx.shadowBlur = 8; ctx.shadowColor = col;
+    ctx.font = 'bold ' + Math.max(14, o.r * 0.7) + 'px -apple-system,system-ui,sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(o.hp, o.x, o.y + 1);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+  function drawShot() {
+    if (!shot) return;
+    for (let i = 0; i < shot.trail.length; i++) {
+      const p = shot.trail[i]; const t = i / shot.trail.length;
+      ctx.fillStyle = PLAYER_COLOR[shot.owner] + Math.round(t * 70).toString(16).padStart(2, '0');
+      ctx.beginPath(); ctx.arc(p.x, p.y, 7 * t, 0, Math.PI * 2); ctx.fill();
+    }
+    const g = ctx.createRadialGradient(shot.x, shot.y, 1, shot.x, shot.y, SHOT_RADIUS * 1.8);
+    g.addColorStop(0, '#fff'); g.addColorStop(0.5, PLAYER_COLOR[shot.owner]); g.addColorStop(1, PLAYER_COLOR[shot.owner] + '00');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(shot.x, shot.y, SHOT_RADIUS * 1.8, 0, Math.PI * 2); ctx.fill();
+  }
+  function drawParticles(now) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i]; const t = (now - p.born) / p.life;
+      if (t >= 1) { particles.splice(i, 1); continue; }
+      const x = p.x + p.vx * t, y = p.y + p.vy * t + 160 * t * t;
+      ctx.globalAlpha = 1 - t; ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(x, y, p.size * (1 - t * 0.4), 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+  function draw(now) {
+    ctx.clearRect(0, 0, W, H);
+    ctx.save();
+    // online: each player always sees their own cannon at the bottom of
+    // their own screen (no phone-passing, so no manual flip needed)
+    if (mode === 'online' && localPlayer === 2) {
+      ctx.translate(W / 2, H / 2); ctx.rotate(Math.PI); ctx.translate(-W / 2, -H / 2);
+    }
+    drawBg(now); drawGrid(); drawDeathLines();
+    drawCannon(1); drawCannon(2);
+    orbs.forEach(drawOrb);
+    drawParticles(now);
+    drawShot();
+    ctx.restore();
+  }
+
+  let lastTime = 0;
+  function loop(now) {
+    const dt = Math.min(0.032, (now - (lastTime || now)) / 1000);
+    lastTime = now;
+    physicsStep(dt);
+    growOrbs(dt);
+    draw(now);
+    if (state === 'result') return;
+    requestAnimationFrame(loop);
+  }
+
+  resize();
+  draw(performance.now());
+})();
+</script>
+</body>
+</html>
