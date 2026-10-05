@@ -278,10 +278,20 @@ const db = getFirestore(fbApp);
   });
   document.getElementById('onlineMenuBackBtn').addEventListener('click', goTitle);
   document.getElementById('retryBtn').addEventListener('click', () => {
-    if (mode === 'online') { goTitle(); return; } // online: start a fresh room instead of instant retry
+    if (mode === 'online') { requestRematch(); return; } // online: rematch in the same room, no need to re-share a code
     startMatch();
   });
   document.getElementById('resultMenuBtn').addEventListener('click', goTitle);
+
+  // 部屋から出ず連戦できるように: 「もう一度」は同じ部屋のまま試合状態だけ
+  // リセットする(hostId/guestId/codeはそのまま)。どちらが押してもよく、
+  // 押した側が即座に試合データを初期化し、両端末ともstatus変化を検知して
+  // beginOnlineMatch()で'aiming'へ戻る(新しい部屋コードの再共有は不要)。
+  async function requestRematch() {
+    if (!roomCode) { goTitle(); return; }
+    lastSeenShotSeq = 0;
+    await writeRoomState({ status: 'playing', winner: null, orbs: [], turn: 1, shotSeq: 0, firedShot: null });
+  }
 
   // ---- online: room code helpers ----
   function genCode() { return String(Math.floor(1000 + Math.random() * 9000)); }
@@ -296,14 +306,23 @@ const db = getFirestore(fbApp);
   }
   function denormOrbs(list) {
     const span = deathLineY[1] - deathLineY[2];
-    // 位置が一致する既存のローカルオーブがあれば、そのrをそのまま引き継いで
-    // 成長アニメを継続させる(そうしないとスナップショットが届くたびに
-    // 最終サイズへ瞬間ワープし、育つ演出が見えなくなる)。新規のオーブだけ
-    // r=2から始めてgrowOrbs()で自然に育てる。
-    return (list || []).map(n => {
-      const x = n.nx * W, y = deathLineY[2] + n.ny * span, targetR = n.nr * W;
-      const existing = orbs.find(o => Math.abs(o.x - x) < 1 && Math.abs(o.y - y) < 1);
-      return { x, y, r: existing ? existing.r : 2, targetR, hp: n.hp, colorIdx: n.colorIdx };
+    // 両端末は同じ発射(shotSeq)をそれぞれ自分でも物理シミュレーションして
+    // 独自にオーブを作っている(相手の発射もfireLocalShotでリプレイするため)。
+    // なので「このインデックスのオーブはもうローカルにある」なら完全にそのまま
+    // 触らない。位置で同期側の値に上書きすると、(a) バウンド物理のdt差で
+    // 自分の計算と微妙にズレた位置へ瞬間移動して見えたり、(b) 画面サイズ比が
+    // 違う相手の端末で計算されたtargetR(幅基準でしか正規化してないので、
+    // 高さ由来のデットライン余白が違う端末では安全範囲が変わる)をそのまま
+    // 使ってデットラインを突き抜けるほど膨張したりする。
+    // まだローカルに無い分(再接続などの追いつき用)だけ、同期データから新規
+    // に作り、targetRは自分の画面の壁・デットライン距離で安全な値にクランプする。
+    return (list || []).map((n, i) => {
+      const existing = orbs[i];
+      if (existing) return existing;
+      const x = n.nx * W, y = deathLineY[2] + n.ny * span;
+      const maxSafeR = Math.max(4, Math.min(x, W - x, y - deathLineY[2], deathLineY[1] - y));
+      const targetR = Math.min(n.nr * W, maxSafeR);
+      return { x, y, r: 2, targetR, hp: n.hp, colorIdx: n.colorIdx };
     });
   }
 
@@ -323,6 +342,13 @@ const db = getFirestore(fbApp);
   function applyRemoteState(data) {
     if (!data) return;
     if (data.guestJoined && state !== 'aiming' && state !== 'flying' && state !== 'settling' && state !== 'result') {
+      beginOnlineMatch();
+    }
+    // 連戦: 結果画面(state==='result')のままstatusが'playing'に戻ったら、
+    // どちらが「もう一度」を押したかに関わらず両端末ともここで検知して
+    // 試合を再開する(新しい部屋コードを作り直さなくていい)。
+    if (state === 'result' && data.status === 'playing') {
+      lastSeenShotSeq = data.shotSeq || 0;
       beginOnlineMatch();
     }
     // Live-replay the opponent's shot: when their fire event arrives, run the
