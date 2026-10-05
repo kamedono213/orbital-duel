@@ -288,11 +288,23 @@ const db = getFirestore(fbApp);
 
   function normOrbs() {
     const span = deathLineY[1] - deathLineY[2];
-    return orbs.map(o => ({ nx: o.x / W, ny: (o.y - deathLineY[2]) / span, nr: o.r / W, hp: o.hp, colorIdx: o.colorIdx }));
+    // targetR(最終サイズ)を送る。o.rをそのまま送ると、作られた直後のまだ
+    // 育ってない小さい半径(r=2)がそのままFirestoreへ飛び、自分のエコー
+    // 受信でローカルの成長アニメ中のオーブを「もう育ちきった小さいオーブ」
+    // として上書きしてしまい、オーブが一切広がらなく見えるバグになる。
+    return orbs.map(o => ({ nx: o.x / W, ny: (o.y - deathLineY[2]) / span, nr: o.targetR / W, hp: o.hp, colorIdx: o.colorIdx }));
   }
   function denormOrbs(list) {
     const span = deathLineY[1] - deathLineY[2];
-    return (list || []).map(n => ({ x: n.nx * W, y: deathLineY[2] + n.ny * span, r: n.nr * W, targetR: n.nr * W, hp: n.hp, colorIdx: n.colorIdx }));
+    // 位置が一致する既存のローカルオーブがあれば、そのrをそのまま引き継いで
+    // 成長アニメを継続させる(そうしないとスナップショットが届くたびに
+    // 最終サイズへ瞬間ワープし、育つ演出が見えなくなる)。新規のオーブだけ
+    // r=2から始めてgrowOrbs()で自然に育てる。
+    return (list || []).map(n => {
+      const x = n.nx * W, y = deathLineY[2] + n.ny * span, targetR = n.nr * W;
+      const existing = orbs.find(o => Math.abs(o.x - x) < 1 && Math.abs(o.y - y) < 1);
+      return { x, y, r: existing ? existing.r : 2, targetR, hp: n.hp, colorIdx: n.colorIdx };
+    });
   }
 
   async function writeRoomState(partial) {
